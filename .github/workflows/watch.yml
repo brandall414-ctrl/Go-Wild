@@ -1,0 +1,50 @@
+name: Watch GoWild
+
+on:
+  schedule:
+    # Every hour at 13 past (off the top of the hour, when GitHub's scheduler is busiest).
+    - cron: "13 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_email:
+        description: "Send a test email showing what the tracker sees right now"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: watch-gowild
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run parser tests
+        run: python -m unittest
+      - name: Check Frontier
+        id: watch
+        continue-on-error: true
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_TO: ${{ secrets.ALERT_TO }}
+        run: python -m gowild.watch ${{ inputs.test_email && '--test' || '' }}
+      - name: Save state
+        run: |
+          git config user.name "gowild-tracker"
+          git config user.email "actions@users.noreply.github.com"
+          git add state
+          git diff --cached --quiet || git commit -m "Check $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Fail the run if the check failed
+        if: steps.watch.outcome == 'failure'
+        run: exit 1
